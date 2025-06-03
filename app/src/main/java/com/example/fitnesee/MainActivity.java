@@ -211,6 +211,7 @@ public class MainActivity extends AppCompatActivity {
         private final List<NutritionDatabase.MealEntry> meals = new ArrayList<>();
         private final String mealType;
 
+
         MealAdapter(String mealType) {
             this.mealType = mealType;
         }
