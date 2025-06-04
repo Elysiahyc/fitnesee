@@ -8,14 +8,13 @@ import android.database.sqlite.SQLiteOpenHelper;
 import android.os.AsyncTask;
 import android.util.Log;
 
+import androidx.annotation.NonNull;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.json.JSONException;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -32,6 +31,12 @@ import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
 
 public class NutritionDatabase extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "Nutrition.db";
@@ -55,11 +60,10 @@ public class NutritionDatabase extends SQLiteOpenHelper {
     private static final String LOG_FOOD_NAME = "food_name";
     private static final String LOG_GRAMS = "grams";
     private static final String LOG_MEAL_TYPE = "meal_type";
-    private static final String ZHIPU_API_KEY = "9fc2d468ac024c6a94e74dc94ded7242.f1luPWTJsQ3Z3EGu";
     private static final String TAG = "NutritionDatabase";
     private static final long TASK_TIMEOUT_SECONDS = 60;
-    private static final int MAX_RETRIES = 3;
-    private static final int RETRY_DELAY_MS = 2000;
+
+    private static final OkHttpClient client = new OkHttpClient();
 
     public NutritionDatabase(Context context) {
         super(context, DATABASE_NAME, null, DATABASE_VERSION);
@@ -137,22 +141,45 @@ public class NutritionDatabase extends SQLiteOpenHelper {
         new FetchDailyFoodTask(listener).execute(meals);
     }
 
-    private void logUploadData(List<MealEntry> meals) {
+    public List<LogEntry> logUploadData(List<MealEntry> meals) {
         SQLiteDatabase db = this.getWritableDatabase();
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'HKT'");
-        sdf.setTimeZone(TimeZone.getTimeZone("Asia/Hong_Kong"));
-        String timestamp = sdf.format(Calendar.getInstance(TimeZone.getTimeZone("Asia/Hong_Kong")).getTime());
+        SimpleDateFormat dateFormat = new SimpleDateFormat("MM月dd日");
+        dateFormat.setTimeZone(TimeZone.getTimeZone("Asia/Hong_Kong"));
+        String currentDate = dateFormat.format(Calendar.getInstance(TimeZone.getTimeZone("Asia/Hong_Kong")).getTime());
+        SimpleDateFormat timeFormat = new SimpleDateFormat("HH:mm:ss 'HKT'");
+        timeFormat.setTimeZone(TimeZone.getTimeZone("Asia/Hong_Kong"));
+        String currentTime = timeFormat.format(Calendar.getInstance(TimeZone.getTimeZone("Asia/Hong_Kong")).getTime());
+        String timestamp = currentDate + " " + currentTime;
 
+        List<LogEntry> latestLogs = new ArrayList<>();
         for (MealEntry meal : meals) {
+            // 检查当天是否存在记录
+            String whereClause = LOG_TIMESTAMP + " LIKE ? AND " + LOG_FOOD_NAME + " = ?";
+            String[] whereArgs = {currentDate + "%", meal.foodName};
+            Cursor cursor = db.query(TABLE_LOG, new String[]{COLUMN_ID, LOG_TIMESTAMP, LOG_FOOD_NAME, LOG_GRAMS, LOG_MEAL_TYPE},
+                    whereClause, whereArgs, null, null, LOG_TIMESTAMP + " DESC LIMIT 1");
+
             ContentValues values = new ContentValues();
             values.put(LOG_TIMESTAMP, timestamp);
             values.put(LOG_FOOD_NAME, meal.foodName);
             values.put(LOG_GRAMS, meal.grams);
-            values.put(LOG_MEAL_TYPE, meal.mealType);
-            db.insert(TABLE_LOG, null, values);
+            values.put(LOG_MEAL_TYPE, meal.mealType != null ? meal.mealType : "unknown");
+
+            if (cursor.moveToFirst()) {
+                // 如果存在记录，更新最后一条记录
+                int id = cursor.getInt(cursor.getColumnIndexOrThrow(COLUMN_ID));
+                db.update(TABLE_LOG, values, COLUMN_ID + "=?", new String[]{String.valueOf(id)});
+                latestLogs.add(new LogEntry(timestamp, meal.foodName, meal.grams, meal.mealType != null ? meal.mealType : "unknown"));
+            } else {
+                // 如果不存在记录，插入新记录
+                db.insert(TABLE_LOG, null, values);
+                latestLogs.add(new LogEntry(timestamp, meal.foodName, meal.grams, meal.mealType != null ? meal.mealType : "unknown"));
+            }
+            cursor.close();
         }
         db.close();
-        Log.d(TAG, "Logged upload data for timestamp: " + timestamp);
+        Log.d(TAG, "Logged upload data for date: " + currentDate + ", time: " + currentTime);
+        return latestLogs;
     }
 
     public List<LogEntry> getUploadLogs() {
@@ -241,6 +268,15 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                             totalCarb += foodData.carb;
                         } else {
                             Log.w(TAG, "No data fetched for: " + meal.foodName);
+                            foodData = getDefaultFoodData(meal.foodName, meal.grams);
+                            if (foodData != null) {
+                                String mealType = meal.mealType != null ? meal.mealType : "breakfast";
+                                mealData.get(mealType).add(foodData);
+                                totalCalories += foodData.calories;
+                                totalProtein += foodData.protein;
+                                totalFat += foodData.fat;
+                                totalCarb += foodData.carb;
+                            }
                         }
                     }
 
@@ -274,7 +310,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                 Thread.currentThread().interrupt();
                 return null;
             } catch (TimeoutException e) {
-                errorMessage = "Task timed out: Network request did not complete within " + TASK_TIMEOUT_SECONDS + " seconds";
+                errorMessage = "Task timed out: " + e.getMessage();
                 Log.e(TAG, errorMessage);
                 futureTask.cancel(true);
                 return null;
@@ -294,244 +330,197 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                 return scaleFoodData(cachedData, grams);
             }
 
-            HttpURLConnection conn = null;
-            BufferedReader reader = null;
-            int retryCount = 0;
-            while (retryCount < MAX_RETRIES) {
-                try {
-                    String apiUrl = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
-                    URL url = new URL(apiUrl);
-                    conn = (HttpURLConnection) url.openConnection();
-                    conn.setRequestMethod("POST");
-                    conn.setConnectTimeout(30000);
-                    conn.setReadTimeout(30000);
-                    conn.setRequestProperty("Content-Type", "application/json");
-                    conn.setRequestProperty("Authorization", "Bearer " + ZHIPU_API_KEY);
+            String apiUrl = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+            String prompt = "Provide the nutrition data per 100g for the food '" + foodName + "' (translate to English if needed). Return in this exact format: 'Calories: X kcal, Protein: Y g, Fat: Z g, Carbohydrates: W g' where X, Y, Z, W are numbers.";
+            JSONObject message = new JSONObject();
+            try {
+                message.put("role", "user");
+                message.put("content", prompt);
+            } catch (JSONException e) {
+                Log.e(TAG, "Failed to create JSON message in fetchFoodData: " + e.getMessage(), e);
+                return getDefaultFoodData(foodName, grams);
+            }
 
-                    String prompt = "Provide the nutrition data per 100g for the food '" + foodName + "' (translate to English if needed). Return in this exact format: 'Calories: X kcal, Protein: Y g, Fat: Z g, Carbohydrates: W g' where X, Y, Z, W are numbers.";
-                    JSONObject message = new JSONObject();
-                    message.put("role", "user");
-                    message.put("content", prompt);
+            JSONArray messages = new JSONArray();
+            messages.put(message);
 
-                    JSONArray messages = new JSONArray();
-                    messages.put(message);
+            JSONObject requestBody = new JSONObject();
+            try {
+                requestBody.put("model", "glm-4");
+                requestBody.put("messages", messages);
+                requestBody.put("max_tokens", 200);
+                requestBody.put("temperature", 0.7);
+                requestBody.put("top_p", 0.9);
+            } catch (JSONException e) {
+                Log.e(TAG, "Failed to create JSON request body in fetchFoodData: " + e.getMessage(), e);
+                return getDefaultFoodData(foodName, grams);
+            }
 
-                    JSONObject requestBody = new JSONObject();
-                    requestBody.put("model", "glm-4");
-                    requestBody.put("messages", messages);
-                    requestBody.put("max_tokens", 200);
-                    requestBody.put("temperature", 0.7);
-                    requestBody.put("top_p", 0.9);
+            Request request = new Request.Builder()
+                    .url(apiUrl)
+                    .addHeader("Authorization", "Bearer " + BuildConfig.ZHIPU_API_KEY)
+                    .post(RequestBody.create(MediaType.parse("application/json"), requestBody.toString()))
+                    .build();
 
-                    Log.d(TAG, "Zhipu API Request Body for Nutrition: " + requestBody.toString());
-                    OutputStream os = conn.getOutputStream();
-                    os.write(requestBody.toString().getBytes("UTF-8"));
-                    os.flush();
-                    os.close();
-
-                    int responseCode = conn.getResponseCode();
-                    Log.d(TAG, "Zhipu API Response Code for Nutrition: " + responseCode);
-                    if (responseCode == HttpURLConnection.HTTP_OK) {
-                        reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
-                        StringBuilder response = new StringBuilder();
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            response.append(line);
-                        }
-                        String responseText = response.toString();
-                        Log.d(TAG, "Zhipu API Raw Response for Nutrition: " + responseText);
-
-                        if (responseText == null || responseText.trim().isEmpty()) {
-                            throw new Exception("Empty response from Zhipu API for nutrition data");
-                        }
-
-                        JSONObject json = new JSONObject(responseText);
-                        if (!json.has("choices") || json.getJSONArray("choices").length() == 0) {
-                            throw new Exception("No choices found in API response for nutrition data");
-                        }
-
-                        JSONArray choices = json.getJSONArray("choices");
-                        String content = choices.getJSONObject(0).getJSONObject("message").getString("content");
-                        if (content == null || content.trim().isEmpty()) {
-                            content = choices.getJSONObject(0).optString("text", "");
-                        }
-                        Log.d(TAG, "Extracted Content for Nutrition: " + content);
-
-                        double calories = extractNutrient(content, "Calories");
-                        double protein = extractNutrient(content, "Protein");
-                        double fat = extractNutrient(content, "Fat");
-                        double carb = extractNutrient(content, "Carbohydrates");
-
-                        if (calories == 0.0) {
-                            Log.w(TAG, "Failed to fetch calories for " + foodName + ", using default data");
-                            return getDefaultFoodData(foodName, grams);
-                        }
-
-                        saveToLocalDatabase(foodName, calories, protein, fat, carb);
-                        return scaleFoodData(new FoodData(foodName, calories, protein, fat, carb), grams);
-                    } else {
-                        reader = new BufferedReader(new InputStreamReader(conn.getErrorStream(), "UTF-8"));
-                        StringBuilder errorResponse = new StringBuilder();
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            errorResponse.append(line);
-                        }
-                        throw new Exception("Zhipu API request failed for nutrition data, status: " + responseCode + ", error: " + errorResponse.toString());
-                    }
-                } catch (Exception e) {
-                    retryCount++;
-                    Log.w(TAG, "Zhipu API attempt " + retryCount + "/" + MAX_RETRIES + " failed for nutrition data: " + e.getMessage());
-                    if (retryCount == MAX_RETRIES) {
-                        Log.w(TAG, "Max retries reached for nutrition data, using default data");
+            try (Response response = client.newCall(request).execute()) {
+                if (response.isSuccessful()) {
+                    String responseText = response.body() != null ? response.body().string() : "";
+                    Log.d(TAG, "Zhipu API Response for Nutrition: " + responseText);
+                    if (responseText.isEmpty()) {
+                        Log.w(TAG, "Empty response from Zhipu API for " + foodName);
                         return getDefaultFoodData(foodName, grams);
                     }
-                    try {
-                        Thread.sleep(RETRY_DELAY_MS);
-                    } catch (InterruptedException ie) {
-                        Log.w(TAG, "Retry delay interrupted, skipping delay: " + ie.getMessage());
-                        Thread.currentThread().interrupt();
+                    double calories = extractNutrient(responseText, "Calories");
+                    double protein = extractNutrient(responseText, "Protein");
+                    double fat = extractNutrient(responseText, "Fat");
+                    double carb = extractNutrient(responseText, "Carbohydrates");
+
+                    if (calories == 0.0) {
+                        Log.w(TAG, "Failed to fetch calories for " + foodName + ", using default data");
+                        return getDefaultFoodData(foodName, grams);
                     }
-                } finally {
-                    if (reader != null) try { reader.close(); } catch (Exception e) { Log.e(TAG, "Error closing reader", e); }
-                    if (conn != null) conn.disconnect();
+
+                    saveToLocalDatabase(foodName, calories, protein, fat, carb);
+                    return scaleFoodData(new FoodData(foodName, calories, protein, fat, carb), grams);
+                } else {
+                    String errorBody = response.body() != null ? response.body().string() : "No response body";
+                    Log.e(TAG, "Zhipu API request failed in fetchFoodData: " + response.code() + " - " + response.message() + ", body: " + errorBody);
+                    return getDefaultFoodData(foodName, grams);
                 }
+            } catch (IOException e) {
+                Log.e(TAG, "Network error for " + foodName + ": " + e.getMessage(), e);
+                return getDefaultFoodData(foodName, grams);
             }
-            return getDefaultFoodData(foodName, grams);
         }
 
         private String fetchPersonalizedAdviceFromZhipu(double totalCalories, double recommendedCalories, double breakfastCalories, double lunchCalories, double dinnerCalories, String goal) {
-            HttpURLConnection conn = null;
-            BufferedReader reader = null;
-            int retryCount = 0;
-            while (retryCount < MAX_RETRIES) {
-                try {
-                    String apiUrl = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
-                    URL url = new URL(apiUrl);
-                    conn = (HttpURLConnection) url.openConnection();
-                    conn.setRequestMethod("POST");
-                    conn.setConnectTimeout(30000);
-                    conn.setReadTimeout(30000);
-                    conn.setRequestProperty("Content-Type", "application/json");
-                    conn.setRequestProperty("Authorization", "Bearer " + ZHIPU_API_KEY);
+            String apiUrl = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+            Calendar calendar = Calendar.getInstance(TimeZone.getTimeZone("Asia/Hong_Kong"));
+            SimpleDateFormat sdf = new SimpleDateFormat("HH:mm 'HKT' 'on' yyyy-MM-dd");
+            sdf.setTimeZone(TimeZone.getTimeZone("Asia/Hong_Kong"));
+            String currentTime = sdf.format(calendar.getTime());
+            int hour = calendar.get(Calendar.HOUR_OF_DAY);
+            String currentMealPhase = hour < 10 ? "breakfast" : hour < 16 ? "lunch" : "dinner";
 
-                    Calendar calendar = Calendar.getInstance(TimeZone.getTimeZone("Asia/Hong_Kong"));
-                    SimpleDateFormat sdf = new SimpleDateFormat("HH:mm 'HKT' on yyyy-MM-dd");
-                    sdf.setTimeZone(TimeZone.getTimeZone("Asia/Hong_Kong"));
-                    String currentTime = sdf.format(calendar.getTime());
-                    int hour = calendar.get(Calendar.HOUR_OF_DAY);
+            String prompt = String.format(
+                    "You are a nutrition and fitness expert. The current time is %s. A user has the following nutrition data:\n" +
+                            "- Breakfast calories: %.1f kcal\n" +
+                            "- Lunch calories: %.1f kcal\n" +
+                            "- Dinner calories: %.1f kcal\n" +
+                            "- Total calories consumed: %.1f kcal\n" +
+                            "- Recommended daily calories: %.1f kcal\n" +
+                            "- User's goal: %s (options: 'lose' for weight loss, 'gain' for muscle gain, 'maintain' for maintenance)\n" +
+                            "Provide a concise and personalized advice in Chinese, including only the following:\n" +
+                            "1. A simple comparison of total calories consumed vs. recommended calories (e.g., '您摄入的热量为X千卡，推荐热量为Y千卡').\n" +
+                            "2. If not all meals are completed and there are remaining calories, suggest a specific meal plan for their next meal with example foods and approximate calorie counts (e.g., '建议下一餐：200g鸡胸肉约300千卡，150g米饭约195千卡，150g蔬菜约50千卡').\n" +
+                            "3. If all meals are completed or it's too late for another meal, suggest a healthy diet plan for tomorrow (e.g., '明天的健康饮食建议：早餐：燕麦50g约190千卡，鸡蛋2个约136千卡；午餐：鸡胸肉200g约300千卡，米饭150g约195千卡；晚餐：三文鱼150g约300千卡，蔬菜150g约50千卡').\n" +
+                            "4. Provide exercise suggestions based on their goal and calorie status:\n" +
+                            "   - If they exceeded their recommended calories, suggest specific exercises to burn off the excess (e.g., '运动建议：跑步30分钟消耗约300千卡，或快走1小时消耗约200千卡').\n" +
+                            "   - If they are within or below their calorie goal, suggest exercises to support their goal:\n" +
+                            "     - For 'lose': Suggest cardio exercises (e.g., '运动建议：跑步30分钟消耗约300千卡，或游泳45分钟消耗约400千卡').\n" +
+                            "     - For 'gain': Suggest strength training (e.g., '运动建议：力量训练，如深蹲、卧推，每次3组，每组10次').\n" +
+                            "     - For 'maintain': Suggest moderate exercise (e.g., '运动建议：快走30分钟消耗约150千卡，或每周3次瑜伽').\n" +
+                            "Ensure the advice is concise and practical, without using '#' headers.",
+                    currentTime, breakfastCalories, lunchCalories, dinnerCalories, totalCalories, recommendedCalories, goal);
 
-                    String currentMealPhase = hour < 10 ? "breakfast" : hour < 16 ? "lunch" : "dinner";
+            JSONObject message = new JSONObject();
+            try {
+                message.put("role", "user");
+                message.put("content", prompt);
+            } catch (JSONException e) {
+                Log.e(TAG, "Failed to create JSON message in fetchAdvice: " + e.getMessage(), e);
+                return generateDefaultAdvice(totalCalories, recommendedCalories, breakfastCalories, lunchCalories, dinnerCalories, goal);
+            }
 
-                    String prompt = String.format(
-                            "You are a nutrition and fitness expert. The current time is %s. A user has the following nutrition data:\n" +
-                                    "- Breakfast calories: %.1f kcal\n" +
-                                    "- Lunch calories: %.1f kcal\n" +
-                                    "- Dinner calories: %.1f kcal\n" +
-                                    "- Total calories consumed: %.1f kcal\n" +
-                                    "- Recommended daily calories: %.1f kcal\n" +
-                                    "- User's goal: %s (options: 'lose' for weight loss, 'gain' for muscle gain, 'maintain' for maintenance)\n" +
-                                    "Provide a concise and personalized advice in Chinese, including only the following:\n" +
-                                    "1. A simple comparison of total calories consumed vs. recommended calories (e.g., '您摄入的热量为X千卡，推荐热量为Y千卡').\n" +
-                                    "2. If not all meals are completed and there are remaining calories, suggest a specific meal plan for their next meal with example foods and approximate calorie counts (e.g., '建议下一餐：200g鸡胸肉约300千卡，150g米饭约195千卡，150g蔬菜约50千卡').\n" +
-                                    "3. If all meals are completed or it's too late for another meal, suggest a healthy diet plan for tomorrow (e.g., '明天的健康饮食建议：早餐：燕麦50g约190千卡，鸡蛋2个约136千卡；午餐：鸡胸肉200g约300千卡，米饭150g约195千卡；晚餐：三文鱼150g约300千卡，蔬菜150g约50千卡').\n" +
-                                    "4. Provide exercise suggestions based on their goal and calorie status:\n" +
-                                    "   - If they exceeded their recommended calories, suggest specific exercises to burn off the excess (e.g., '运动建议：跑步30分钟消耗约300千卡，或快走1小时消耗约200千卡').\n" +
-                                    "   - If they are within or below their calorie goal, suggest exercises to support their goal:\n" +
-                                    "     - For 'lose': Suggest cardio exercises (e.g., '运动建议：跑步30分钟消耗约300千卡，或游泳45分钟消耗约400千卡').\n" +
-                                    "     - For 'gain': Suggest strength training (e.g., '运动建议：力量训练，如深蹲、卧推，每次3组，每组10次').\n" +
-                                    "     - For 'maintain': Suggest moderate exercise (e.g., '运动建议：快走30分钟消耗约150千卡，或每周3次瑜伽').\n" +
-                                    "Ensure the advice is concise and practical, without using '#' headers.",
-                            currentTime, breakfastCalories, lunchCalories, dinnerCalories, totalCalories, recommendedCalories, goal);
+            JSONArray messages = new JSONArray();
+            messages.put(message);
 
-                    JSONObject message = new JSONObject();
-                    message.put("role", "user");
-                    message.put("content", prompt);
+            JSONObject requestBody = new JSONObject();
+            try {
+                requestBody.put("model", "glm-4");
+                requestBody.put("messages", messages);
+                requestBody.put("max_tokens", 500);
+                requestBody.put("temperature", 0.7);
+                requestBody.put("top_p", 0.9);
+            } catch (JSONException e) {
+                Log.e(TAG, "Failed to create JSON request body in fetchAdvice: " + e.getMessage(), e);
+                return generateDefaultAdvice(totalCalories, recommendedCalories, breakfastCalories, lunchCalories, dinnerCalories, goal);
+            }
 
-                    JSONArray messages = new JSONArray();
-                    messages.put(message);
+            Request request = new Request.Builder()
+                    .url(apiUrl)
+                    .addHeader("Authorization", "Bearer " + BuildConfig.ZHIPU_API_KEY)
+                    .post(RequestBody.create(MediaType.parse("application/json"), requestBody.toString()))
+                    .build();
 
-                    JSONObject requestBody = new JSONObject();
-                    requestBody.put("model", "glm-4");
-                    requestBody.put("messages", messages);
-                    requestBody.put("max_tokens", 500);
-                    requestBody.put("temperature", 0.7);
-                    requestBody.put("top_p", 0.9);
-
-                    Log.d(TAG, "Zhipu API Request Body for Advice: " + requestBody.toString());
-                    OutputStream os = conn.getOutputStream();
-                    os.write(requestBody.toString().getBytes("UTF-8"));
-                    os.flush();
-                    os.close();
-
-                    int responseCode = conn.getResponseCode();
-                    Log.d(TAG, "Zhipu API Response Code for Advice: " + responseCode);
-                    if (responseCode == HttpURLConnection.HTTP_OK) {
-                        reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
-                        StringBuilder response = new StringBuilder();
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            response.append(line);
-                        }
-                        String responseText = response.toString();
-                        Log.d(TAG, "Zhipu API Raw Response for Advice: " + responseText);
-
-                        if (responseText == null || responseText.trim().isEmpty()) {
-                            throw new Exception("Empty response from Zhipu API for advice");
-                        }
-
-                        JSONObject json = new JSONObject(responseText);
-                        if (!json.has("choices") || json.getJSONArray("choices").length() == 0) {
-                            throw new Exception("No choices found in API response for advice");
-                        }
-
-                        JSONArray choices = json.getJSONArray("choices");
-                        String content = choices.getJSONObject(0).getJSONObject("message").getString("content");
-                        if (content == null || content.trim().isEmpty()) {
-                            content = choices.getJSONObject(0).optString("text", "");
-                        }
-                        Log.d(TAG, "Extracted Advice: " + content);
-                        return content;
-                    } else {
-                        reader = new BufferedReader(new InputStreamReader(conn.getErrorStream(), "UTF-8"));
-                        StringBuilder errorResponse = new StringBuilder();
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            errorResponse.append(line);
-                        }
-                        throw new Exception("Zhipu API request failed for advice, status: " + responseCode + ", error: " + errorResponse.toString());
+            try (Response response = client.newCall(request).execute()) {
+                String responseText = response.body() != null ? response.body().string() : "";
+                Log.d(TAG, "Zhipu API Response for Advice: " + responseText);
+                if (!response.isSuccessful()) {
+                    Log.e(TAG, "Zhipu API request failed in fetchAdvice: " + response.code() + " - " + response.message() + ", body: " + responseText);
+                    if (response.code() == 401) {
+                        return "API 密钥无效，请检查 ZHIPU_API_KEY 或联系 Zhipu 支持";
+                    } else if (response.code() == 402) {
+                        return "Zhipu API 账户余额不足，请充值后重试";
                     }
-                } catch (Exception e) {
-                    retryCount++;
-                    Log.w(TAG, "Zhipu API attempt " + retryCount + "/" + MAX_RETRIES + " failed for advice: " + e.getMessage());
-                    if (retryCount == MAX_RETRIES) {
-                        Log.w(TAG, "Max retries reached for advice, using default advice");
+                    return generateDefaultAdvice(totalCalories, recommendedCalories, breakfastCalories, lunchCalories, dinnerCalories, goal);
+                }
+
+                if (responseText.isEmpty()) {
+                    Log.w(TAG, "Empty response from Zhipu API for advice");
+                    return generateDefaultAdvice(totalCalories, recommendedCalories, breakfastCalories, lunchCalories, dinnerCalories, goal);
+                }
+
+                try {
+                    JSONObject json = new JSONObject(responseText);
+                    if (!json.has("choices")) {
+                        Log.e(TAG, "Response JSON does not contain 'choices' key: " + responseText);
                         return generateDefaultAdvice(totalCalories, recommendedCalories, breakfastCalories, lunchCalories, dinnerCalories, goal);
                     }
-                    try {
-                        Thread.sleep(RETRY_DELAY_MS);
-                    } catch (InterruptedException ie) {
-                        Log.w(TAG, "Retry delay interrupted, skipping delay: " + ie.getMessage());
-                        Thread.currentThread().interrupt();
+                    JSONArray choices = json.getJSONArray("choices");
+                    if (choices.length() == 0) {
+                        Log.e(TAG, "Choices array is empty: " + responseText);
+                        return generateDefaultAdvice(totalCalories, recommendedCalories, breakfastCalories, lunchCalories, dinnerCalories, goal);
                     }
-                } finally {
-                    if (reader != null) try { reader.close(); } catch (Exception e) { Log.e(TAG, "Error closing reader", e); }
-                    if (conn != null) conn.disconnect();
+                    JSONObject choice = choices.getJSONObject(0);
+                    if (!choice.has("message")) {
+                        Log.e(TAG, "Choice does not contain 'message' key: " + responseText);
+                        return generateDefaultAdvice(totalCalories, recommendedCalories, breakfastCalories, lunchCalories, dinnerCalories, goal);
+                    }
+                    JSONObject messageObj = choice.getJSONObject("message");
+                    if (!messageObj.has("content")) {
+                        Log.e(TAG, "Message does not contain 'content' key: " + responseText);
+                        return generateDefaultAdvice(totalCalories, recommendedCalories, breakfastCalories, lunchCalories, dinnerCalories, goal);
+                    }
+                    String content = messageObj.getString("content");
+                    return content != null && !content.trim().isEmpty() ? content : "无法获取建议，请稍后重试";
+                } catch (JSONException e) {
+                    Log.e(TAG, "Failed to parse Zhipu API response: " + e.getMessage() + ", response: " + responseText, e);
+                    return generateDefaultAdvice(totalCalories, recommendedCalories, breakfastCalories, lunchCalories, dinnerCalories, goal);
                 }
+            } catch (IOException e) {
+                Log.e(TAG, "Network error for advice: " + e.getMessage(), e);
+                return generateDefaultAdvice(totalCalories, recommendedCalories, breakfastCalories, lunchCalories, dinnerCalories, goal);
             }
-            return generateDefaultAdvice(totalCalories, recommendedCalories, breakfastCalories, lunchCalories, dinnerCalories, goal);
         }
 
         private double extractNutrient(String responseText, String nutrient) {
-            String pattern = "(?i)" + nutrient + ":\\s*(\\d+\\.?\\d*)\\s*(kcal|g)?";
-            Pattern p = Pattern.compile(pattern);
-            Matcher m = p.matcher(responseText);
-            if (m.find()) {
-                double value = Double.parseDouble(m.group(1));
-                Log.d(TAG, "Extracted " + nutrient + ": " + value);
-                return value;
+            Log.d(TAG, "Extracting nutrient: " + nutrient + ", from response: " + responseText);
+            String pattern = "(?i)" + Pattern.quote(nutrient) + ":\\s*(\\d+\\.?\\d*)\\s*(kcal|g)?";
+            try {
+                Pattern p = Pattern.compile(pattern);
+                Matcher m = p.matcher(responseText);
+                if (m.find()) {
+                    double value = Double.parseDouble(m.group(1));
+                    Log.d(TAG, "Extracted " + nutrient + ": " + value);
+                    return value;
+                }
+                Log.w(TAG, "Failed to extract " + nutrient + " from: " + responseText);
+                return 0.0;
+            } catch (IllegalArgumentException e) {
+                Log.e(TAG, "Invalid pattern for nutrient: " + nutrient + ", error: " + e.getMessage(), e);
+                return 0.0;
             }
-            Log.w(TAG, "Failed to extract " + nutrient + " from: " + responseText);
-            return 0.0;
         }
 
         private FoodData scaleFoodData(FoodData foodData, double grams) {
@@ -623,9 +612,6 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                     listener.onDataFetched(result, result.totalCalories, result.totalProtein, result.totalFat, result.totalCarb, result.recommendedCalories, result.advice);
                 } else {
                     String detailedError = errorMessage != null ? errorMessage : "Unable to fetch food data, please retry";
-                    if (errorMessage != null && errorMessage.contains("status: 402")) {
-                        detailedError += "\n原因：API 余额不足，请联系管理员充值或更换密钥。";
-                    }
                     listener.onError(detailedError);
                 }
             }

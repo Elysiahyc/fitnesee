@@ -16,6 +16,7 @@ fragment-testing = "1.8.4"
 test-rules = "1.6.1"
 desugar-jdk-libs = "2.1.2"
 cardview = "1.0.0"
+okhttp = "4.12.0"
 
 [libraries]
 appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
@@ -34,6 +35,7 @@ fragment-testing = { group = "androidx.fragment", name = "fragment-testing", ver
 test-rules = { group = "androidx.test", name = "rules", version.ref = "test-rules" }
 desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugar-jdk-libs" }
 cardview = { group = "androidx.cardview", name = "cardview", version.ref = "cardview" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

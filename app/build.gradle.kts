@@ -12,9 +12,18 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        vectorDrawables.useSupportLibrary = true
+
+        vectorDrawables {
+            useSupportLibrary = true
+        }
+
         multiDexEnabled = true
+
+        val zhipuApiKey = project.findProperty("ZHIPU_API_KEY") as? String
+            ?: throw GradleException("ZHIPU_API_KEY is not defined in gradle.properties. Please check the file.")
+        buildConfigField("String", "ZHIPU_API_KEY", "\"$zhipuApiKey\"")
     }
 
     buildTypes {
@@ -45,39 +54,41 @@ android {
     }
 
     packaging {
-        resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
-            excludes += "META-INF/DEPENDENCIES"
-        }
+        resources.excludes += setOf(
+            "META-INF/AL2.0",
+            "META-INF/LGPL2.1",
+            "META-INF/DEPENDENCIES"
+        )
     }
 }
 
 configurations.all {
-    resolutionStrategy {
-        eachDependency {
-            when (requested.group) {
-                "androidx.lifecycle" -> useVersion("2.8.4")
-                "androidx.fragment" -> useVersion("1.8.4")
-            }
+    resolutionStrategy.eachDependency {
+        when (requested.group) {
+            "androidx.lifecycle" -> useVersion(libs.versions.lifecycle.runtime.get())
+            "androidx.fragment" -> useVersion(libs.versions.fragment.testing.get())
         }
     }
 }
 
 dependencies {
-    implementation(libs.cardview)
     implementation(libs.appcompat)
     implementation(libs.material)
     implementation(libs.activity)
     implementation(libs.constraintlayout)
     implementation(libs.recyclerview)
+    implementation(libs.cardview)
     implementation(libs.org.json)
     implementation(libs.lifecycle.runtime)
     implementation(libs.core.splashscreen)
     implementation(libs.datastore.preferences)
+    implementation(libs.okhttp)
+
     coreLibraryDesugaring(libs.desugar.jdk.libs)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
-    debugImplementation(libs.fragment.testing)
     androidTestImplementation(libs.test.rules)
+    debugImplementation(libs.fragment.testing)
 }
