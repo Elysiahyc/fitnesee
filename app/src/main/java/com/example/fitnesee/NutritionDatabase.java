@@ -38,39 +38,44 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 
+// 数据库帮助类，用于管理营养数据和用户日志
 public class NutritionDatabase extends SQLiteOpenHelper {
-    private static final String DATABASE_NAME = "Nutrition.db";
-    private static final int DATABASE_VERSION = 6;
-    private static final String TABLE_FOOD = "food_nutrients";
-    private static final String TABLE_USER = "user_profile";
-    private static final String TABLE_LOG = "upload_log";
-    private static final String COLUMN_ID = "id";
-    private static final String COLUMN_NAME = "name";
-    private static final String COLUMN_PROTEIN = "protein";
-    private static final String COLUMN_FAT = "fat";
-    private static final String COLUMN_CARB = "carb";
-    private static final String COLUMN_CALORIES = "calories";
-    private static final String USER_ID = "user_id";
-    private static final String USER_WEIGHT = "weight";
-    private static final String USER_HEIGHT = "height";
-    private static final String USER_AGE = "age";
-    private static final String USER_GENDER = "gender";
-    private static final String USER_GOAL = "goal";
-    private static final String LOG_TIMESTAMP = "timestamp";
-    private static final String LOG_FOOD_NAME = "food_name";
-    private static final String LOG_GRAMS = "grams";
-    private static final String LOG_MEAL_TYPE = "meal_type";
-    private static final String TAG = "NutritionDatabase";
-    private static final long TASK_TIMEOUT_SECONDS = 60;
+    // 定义数据库相关常量
+    private static final String DATABASE_NAME = "Nutrition.db"; // 数据库名称
+    private static final int DATABASE_VERSION = 6; // 数据库版本号
+    private static final String TABLE_FOOD = "food_nutrients"; // 食物营养表
+    private static final String TABLE_USER = "user_profile"; // 用户资料表
+    private static final String TABLE_LOG = "upload_log"; // 饮食日志表
+    private static final String COLUMN_ID = "id"; // 主键ID
+    private static final String COLUMN_NAME = "name"; // 食物名称
+    private static final String COLUMN_PROTEIN = "protein"; // 蛋白质
+    private static final String COLUMN_FAT = "fat"; // 脂肪
+    private static final String COLUMN_CARB = "carb"; // 碳水化合物
+    private static final String COLUMN_CALORIES = "calories"; // 热量
+    private static final String USER_ID = "user_id"; // 用户ID
+    private static final String USER_WEIGHT = "weight"; // 体重
+    private static final String USER_HEIGHT = "height"; // 身高
+    private static final String USER_AGE = "age"; // 年龄
+    private static final String USER_GENDER = "gender"; // 性别
+    private static final String USER_GOAL = "goal"; // 健身目标
+    private static final String LOG_TIMESTAMP = "timestamp"; // 日志时间戳
+    private static final String LOG_FOOD_NAME = "food_name"; // 日志中的食物名称
+    private static final String LOG_GRAMS = "grams"; // 食物克数
+    private static final String LOG_MEAL_TYPE = "meal_type"; // 餐类型
+    private static final String TAG = "NutritionDatabase"; // 日志标签
+    private static final long TASK_TIMEOUT_SECONDS = 60; // 任务超时时间（秒）
 
-    private static final OkHttpClient client = new OkHttpClient();
+    private static final OkHttpClient client = new OkHttpClient(); // HTTP客户端实例
 
+    // 构造函数，初始化数据库
     public NutritionDatabase(Context context) {
         super(context, DATABASE_NAME, null, DATABASE_VERSION);
     }
 
+    // 创建数据库表结构
     @Override
     public void onCreate(SQLiteDatabase db) {
+        // 创建食物营养表
         String createFoodTable = "CREATE TABLE " + TABLE_FOOD + " (" +
                 COLUMN_ID + " INTEGER PRIMARY KEY AUTOINCREMENT, " +
                 COLUMN_NAME + " TEXT, " +
@@ -80,6 +85,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                 COLUMN_CALORIES + " REAL)";
         db.execSQL(createFoodTable);
 
+        // 创建用户资料表
         String createUserTable = "CREATE TABLE " + TABLE_USER + " (" +
                 USER_ID + " INTEGER PRIMARY KEY AUTOINCREMENT, " +
                 USER_WEIGHT + " REAL, " +
@@ -89,6 +95,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                 USER_GOAL + " TEXT)";
         db.execSQL(createUserTable);
 
+        // 创建饮食日志表
         String createLogTable = "CREATE TABLE " + TABLE_LOG + " (" +
                 COLUMN_ID + " INTEGER PRIMARY KEY AUTOINCREMENT, " +
                 LOG_TIMESTAMP + " TEXT, " +
@@ -98,14 +105,18 @@ public class NutritionDatabase extends SQLiteOpenHelper {
         db.execSQL(createLogTable);
     }
 
+    // 数据库升级时删除并重建表
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        // 删除现有表
         db.execSQL("DROP TABLE IF EXISTS " + TABLE_FOOD);
         db.execSQL("DROP TABLE IF EXISTS " + TABLE_USER);
         db.execSQL("DROP TABLE IF EXISTS " + TABLE_LOG);
+        // 重新创建表
         onCreate(db);
     }
 
+    // 插入用户资料到数据库
     public void insertUserProfile(double weight, double height, int age, String gender, String goal) {
         SQLiteDatabase db = this.getWritableDatabase();
         ContentValues values = new ContentValues();
@@ -114,15 +125,18 @@ public class NutritionDatabase extends SQLiteOpenHelper {
         values.put(USER_AGE, age);
         values.put(USER_GENDER, gender);
         values.put(USER_GOAL, goal);
+        // 插入用户资料
         db.insert(TABLE_USER, null, values);
         db.close();
     }
 
+    // 查询用户资料
     public UserProfile getUserProfile() {
         SQLiteDatabase db = this.getReadableDatabase();
         Cursor cursor = db.query(TABLE_USER, new String[]{USER_WEIGHT, USER_HEIGHT, USER_AGE, USER_GENDER, USER_GOAL},
                 null, null, null, null, null);
         UserProfile profile = null;
+        // 提取用户资料数据
         if (cursor.moveToFirst()) {
             double weight = cursor.getDouble(cursor.getColumnIndexOrThrow(USER_WEIGHT));
             double height = cursor.getDouble(cursor.getColumnIndexOrThrow(USER_HEIGHT));
@@ -136,13 +150,18 @@ public class NutritionDatabase extends SQLiteOpenHelper {
         return profile;
     }
 
+    // 触发每日食物数据获取
     public void fetchDailyFoodData(List<MealEntry> meals, OnDailyDataFetchedListener listener) {
+        // 记录饮食日志
         logUploadData(meals);
+        // 启动异步任务获取每日数据
         new FetchDailyFoodTask(listener).execute(meals);
     }
 
+    // 记录饮食数据到日志表，处理重复记录并返回最新日志
     public List<LogEntry> logUploadData(List<MealEntry> meals) {
         SQLiteDatabase db = this.getWritableDatabase();
+        // 设置时间格式并获取当前日期和时间（香港时区）
         SimpleDateFormat dateFormat = new SimpleDateFormat("MM月dd日");
         dateFormat.setTimeZone(TimeZone.getTimeZone("Asia/Hong_Kong"));
         String currentDate = dateFormat.format(Calendar.getInstance(TimeZone.getTimeZone("Asia/Hong_Kong")).getTime());
@@ -182,12 +201,15 @@ public class NutritionDatabase extends SQLiteOpenHelper {
         return latestLogs;
     }
 
+    // 获取所有上传日志
     public List<LogEntry> getUploadLogs() {
         List<LogEntry> logs = new ArrayList<>();
         SQLiteDatabase db = this.getReadableDatabase();
+        // 查询日志表，按时间戳降序排列
         Cursor cursor = db.query(TABLE_LOG, new String[]{LOG_TIMESTAMP, LOG_FOOD_NAME, LOG_GRAMS, LOG_MEAL_TYPE},
                 null, null, null, null, LOG_TIMESTAMP + " DESC");
 
+        // 遍历查询结果，构建日志列表
         while (cursor.moveToNext()) {
             String timestamp = cursor.getString(cursor.getColumnIndexOrThrow(LOG_TIMESTAMP));
             String foodName = cursor.getString(cursor.getColumnIndexOrThrow(LOG_FOOD_NAME));
@@ -200,8 +222,10 @@ public class NutritionDatabase extends SQLiteOpenHelper {
         return logs;
     }
 
+    // 从缓存中获取食物数据
     private FoodData getCachedFoodData(String foodName) {
         SQLiteDatabase db = this.getReadableDatabase();
+        // 查询食物营养表，查找指定食物名称的数据
         Cursor cursor = db.query(TABLE_FOOD, new String[]{COLUMN_NAME, COLUMN_PROTEIN, COLUMN_FAT, COLUMN_CARB, COLUMN_CALORIES},
                 COLUMN_NAME + "=?", new String[]{foodName}, null, null, null);
         FoodData foodData = null;
@@ -218,6 +242,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
         return foodData;
     }
 
+    // 将营养数据保存到本地数据库
     private synchronized void saveToLocalDatabase(String name, double calories, double protein, double fat, double carb) {
         SQLiteDatabase db = getWritableDatabase();
         ContentValues values = new ContentValues();
@@ -226,10 +251,12 @@ public class NutritionDatabase extends SQLiteOpenHelper {
         values.put(COLUMN_PROTEIN, protein);
         values.put(COLUMN_FAT, fat);
         values.put(COLUMN_CARB, carb);
+        // 插入或替换食物营养数据
         db.insertWithOnConflict(TABLE_FOOD, null, values, SQLiteDatabase.CONFLICT_REPLACE);
         db.close();
     }
 
+    // 异步任务类，用于获取每日食物数据
     private class FetchDailyFoodTask extends AsyncTask<List<MealEntry>, Void, DailyFoodData> {
         private final OnDailyDataFetchedListener listener;
         private String errorMessage;
@@ -239,11 +266,13 @@ public class NutritionDatabase extends SQLiteOpenHelper {
             this.listener = listener;
         }
 
+        // 任务开始前记录日志
         @Override
         protected void onPreExecute() {
             Log.d(TAG, "Starting FetchDailyFoodTask");
         }
 
+        // 后台执行任务，获取和处理每日数据
         @Override
         protected DailyFoodData doInBackground(List<MealEntry>... params) {
             ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -251,12 +280,14 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                 @Override
                 public DailyFoodData call() throws Exception {
                     List<MealEntry> meals = params[0];
+                    // 初始化餐数据映射
                     Map<String, List<FoodData>> mealData = new HashMap<>();
                     mealData.put("breakfast", new ArrayList<>());
                     mealData.put("lunch", new ArrayList<>());
                     mealData.put("dinner", new ArrayList<>());
                     double totalCalories = 0, totalProtein = 0, totalFat = 0, totalCarb = 0;
 
+                    // 遍历每餐，获取食物数据
                     for (MealEntry meal : meals) {
                         FoodData foodData = fetchFoodDataFromZhipu(meal.foodName, meal.grams);
                         if (foodData != null) {
@@ -268,6 +299,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                             totalCarb += foodData.carb;
                         } else {
                             Log.w(TAG, "No data fetched for: " + meal.foodName);
+                            // 如果API获取失败，使用默认数据
                             foodData = getDefaultFoodData(meal.foodName, meal.grams);
                             if (foodData != null) {
                                 String mealType = meal.mealType != null ? meal.mealType : "breakfast";
@@ -280,6 +312,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                         }
                     }
 
+                    // 获取用户资料并计算推荐热量
                     UserProfile profile = getUserProfile();
                     if (profile == null) {
                         throw new Exception("User profile not found");
@@ -289,10 +322,12 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                     double activityFactor = "maintain".equals(profile.goal) ? 1.2 : "lose".equals(profile.goal) ? 1.1 : 1.375;
                     double recommendedCalories = bmr * activityFactor;
 
+                    // 计算每餐热量
                     double breakfastCalories = mealData.get("breakfast").stream().mapToDouble(fd -> fd.calories).sum();
                     double lunchCalories = mealData.get("lunch").stream().mapToDouble(fd -> fd.calories).sum();
                     double dinnerCalories = mealData.get("dinner").stream().mapToDouble(fd -> fd.calories).sum();
 
+                    // 获取个性化建议
                     String advice = fetchPersonalizedAdviceFromZhipu(totalCalories, recommendedCalories, breakfastCalories, lunchCalories, dinnerCalories, profile.goal);
                     List<FoodData> combinedFoodData = mealData.values().stream()
                             .flatMap(List::stream)
@@ -303,6 +338,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
 
             executor.execute(futureTask);
             try {
+                // 设置超时并获取任务结果
                 return futureTask.get(TASK_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 errorMessage = "Task interrupted: " + e.getMessage();
@@ -323,13 +359,16 @@ public class NutritionDatabase extends SQLiteOpenHelper {
             }
         }
 
+        // 从Zhipu API获取食物营养数据
         private FoodData fetchFoodDataFromZhipu(String foodName, double grams) throws Exception {
+            // 先尝试从缓存获取数据
             FoodData cachedData = getCachedFoodData(foodName);
             if (cachedData != null) {
                 Log.d(TAG, "Using cached data for: " + foodName);
                 return scaleFoodData(cachedData, grams);
             }
 
+            // 构建API请求
             String apiUrl = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
             String prompt = "Provide the nutrition data per 100g for the food '" + foodName + "' (translate to English if needed). Return in this exact format: 'Calories: X kcal, Protein: Y g, Fat: Z g, Carbohydrates: W g' where X, Y, Z, W are numbers.";
             JSONObject message = new JSONObject();
@@ -362,6 +401,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                     .post(RequestBody.create(MediaType.parse("application/json"), requestBody.toString()))
                     .build();
 
+            // 发送请求并处理响应
             try (Response response = client.newCall(request).execute()) {
                 if (response.isSuccessful()) {
                     String responseText = response.body() != null ? response.body().string() : "";
@@ -380,6 +420,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                         return getDefaultFoodData(foodName, grams);
                     }
 
+                    // 保存到本地数据库
                     saveToLocalDatabase(foodName, calories, protein, fat, carb);
                     return scaleFoodData(new FoodData(foodName, calories, protein, fat, carb), grams);
                 } else {
@@ -393,8 +434,10 @@ public class NutritionDatabase extends SQLiteOpenHelper {
             }
         }
 
+        // 从Zhipu API获取个性化建议
         private String fetchPersonalizedAdviceFromZhipu(double totalCalories, double recommendedCalories, double breakfastCalories, double lunchCalories, double dinnerCalories, String goal) {
             String apiUrl = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+            // 获取当前时间并确定当前餐阶段
             Calendar calendar = Calendar.getInstance(TimeZone.getTimeZone("Asia/Hong_Kong"));
             SimpleDateFormat sdf = new SimpleDateFormat("HH:mm 'HKT' 'on' yyyy-MM-dd");
             sdf.setTimeZone(TimeZone.getTimeZone("Asia/Hong_Kong"));
@@ -402,6 +445,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
             int hour = calendar.get(Calendar.HOUR_OF_DAY);
             String currentMealPhase = hour < 10 ? "breakfast" : hour < 16 ? "lunch" : "dinner";
 
+            // 构建提示词
             String prompt = String.format(
                     "You are a nutrition and fitness expert. The current time is %s. A user has the following nutrition data:\n" +
                             "- Breakfast calories: %.1f kcal\n" +
@@ -423,6 +467,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                             "Ensure the advice is concise and practical, without using '#' headers.",
                     currentTime, breakfastCalories, lunchCalories, dinnerCalories, totalCalories, recommendedCalories, goal);
 
+            // 构建请求消息
             JSONObject message = new JSONObject();
             try {
                 message.put("role", "user");
@@ -453,6 +498,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                     .post(RequestBody.create(MediaType.parse("application/json"), requestBody.toString()))
                     .build();
 
+            // 发送请求并处理响应
             try (Response response = client.newCall(request).execute()) {
                 String responseText = response.body() != null ? response.body().string() : "";
                 Log.d(TAG, "Zhipu API Response for Advice: " + responseText);
@@ -471,6 +517,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                     return generateDefaultAdvice(totalCalories, recommendedCalories, breakfastCalories, lunchCalories, dinnerCalories, goal);
                 }
 
+                // 解析响应内容
                 try {
                     JSONObject json = new JSONObject(responseText);
                     if (!json.has("choices")) {
@@ -504,8 +551,10 @@ public class NutritionDatabase extends SQLiteOpenHelper {
             }
         }
 
+        // 提取响应中的营养值
         private double extractNutrient(String responseText, String nutrient) {
             Log.d(TAG, "Extracting nutrient: " + nutrient + ", from response: " + responseText);
+            // 使用正则表达式提取营养值
             String pattern = "(?i)" + Pattern.quote(nutrient) + ":\\s*(\\d+\\.?\\d*)\\s*(kcal|g)?";
             try {
                 Pattern p = Pattern.compile(pattern);
@@ -523,15 +572,18 @@ public class NutritionDatabase extends SQLiteOpenHelper {
             }
         }
 
+        // 按克数缩放食物数据
         private FoodData scaleFoodData(FoodData foodData, double grams) {
             double ratio = grams / 100.0;
             return new FoodData(foodData.name, foodData.calories * ratio, foodData.protein * ratio,
                     foodData.fat * ratio, foodData.carb * ratio);
         }
 
+        // 获取默认食物数据
         private FoodData getDefaultFoodData(String foodName, double grams) {
             double calories, protein, fat, carb;
             String name = foodName.toLowerCase();
+            // 根据食物名称设置默认营养值
             if (name.contains("egg") || name.contains("鸡蛋")) {
                 calories = 68; protein = 6.3; fat = 5.0; carb = 0.5;
             } else if (name.contains("pork") || name.contains("猪肉")) {
@@ -545,10 +597,12 @@ public class NutritionDatabase extends SQLiteOpenHelper {
             return scaleFoodData(new FoodData(foodName, calories, protein, fat, carb), grams);
         }
 
+        // 生成默认建议
         private String generateDefaultAdvice(double totalCalories, double recommendedCalories, double breakfastCalories, double lunchCalories, double dinnerCalories, String goal) {
             StringBuilder advice = new StringBuilder();
             double remainingCalories = recommendedCalories - totalCalories;
 
+            // 确定当前餐阶段和下一餐
             Calendar calendar = Calendar.getInstance(TimeZone.getTimeZone("Asia/Hong_Kong"));
             int hour = calendar.get(Calendar.HOUR_OF_DAY);
             String currentMealPhase = hour < 10 ? "breakfast" : hour < 16 ? "lunch" : "dinner";
@@ -558,8 +612,10 @@ public class NutritionDatabase extends SQLiteOpenHelper {
             if (lunchCalories > 0) mealsCompleted++;
             if (dinnerCalories > 0) mealsCompleted++;
 
+            // 提供热量摄入对比
             advice.append("您摄入的热量为").append(String.format("%.1f", totalCalories)).append("千卡，推荐热量为").append(String.format("%.1f", recommendedCalories)).append("千卡\n");
 
+            // 根据餐完成情况提供饮食建议
             if (mealsCompleted < 3 && nextMeal != null && remainingCalories > 0) {
                 advice.append("建议下一餐（").append(nextMeal).append("）：\n");
                 if ("lose".equals(goal)) {
@@ -586,6 +642,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
                 }
             }
 
+            // 根据热量摄入提供运动建议
             advice.append("\n运动建议：\n");
             if (totalCalories > recommendedCalories) {
                 double excessCalories = totalCalories - recommendedCalories;
@@ -604,6 +661,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
             return advice.toString();
         }
 
+        // 任务完成后通知监听器
         @Override
         protected void onPostExecute(DailyFoodData result) {
             Log.d(TAG, "Entering onPostExecute");
@@ -618,6 +676,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
         }
     }
 
+    // 计算基础代谢率（BMR）
     public double calculateBMR(double weight, double height, int age, String gender) {
         if ("male".equalsIgnoreCase(gender)) {
             return 88.362 + (13.397 * weight) + (4.799 * height) - (5.677 * age);
@@ -626,11 +685,13 @@ public class NutritionDatabase extends SQLiteOpenHelper {
         }
     }
 
+    // 数据获取监听器接口
     public interface OnDailyDataFetchedListener {
         void onDataFetched(DailyFoodData dailyFoodData, double totalCalories, double totalProtein, double totalFat, double totalCarb, double recommendedCalories, String advice);
         void onError(String errorMessage);
     }
 
+    // 食物数据类
     public static class FoodData {
         public String name;
         public double calories, protein, fat, carb;
@@ -644,6 +705,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
         }
     }
 
+    // 餐记录类
     public static class MealEntry {
         public String foodName;
         public double grams;
@@ -662,6 +724,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
         }
     }
 
+    // 每日食物数据类
     public static class DailyFoodData {
         public List<FoodData> foodDataList;
         public double totalCalories, totalProtein, totalFat, totalCarb;
@@ -683,6 +746,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
         }
     }
 
+    // 用户资料类
     public static class UserProfile {
         public double weight, height;
         public int age;
@@ -697,6 +761,7 @@ public class NutritionDatabase extends SQLiteOpenHelper {
         }
     }
 
+    // 日志记录类
     public static class LogEntry {
         public String timestamp;
         public String foodName;
