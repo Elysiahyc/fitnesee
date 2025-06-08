@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background"
+    android:padding="16dp"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:background="@color/cardBackground"
+        android:elevation="4dp"
+        android:padding="16dp">
+
+        <!-- 标题 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="日志记录"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:textColor="@color/primary"
+            android:layout_gravity="center"
+            android:layout_marginBottom="16dp" />
+
+        <!-- 可展开的日志列表 -->
+        <ExpandableListView
+            android:id="@+id/expandableLogList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp" />
+
+    </LinearLayout>
+
+    <!-- 返回按钮 -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/backToMealInputButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="返回"
+        android:layout_gravity="center"
+        android:backgroundTint="@color/secondary"
+        app:cornerRadius="8dp"
+        android:textColor="@color/white"
+        android:padding="12dp"
+        android:layout_marginTop="16dp" />
+
+</LinearLayout>

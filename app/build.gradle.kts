@@ -12,18 +12,14 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
         vectorDrawables {
             useSupportLibrary = true
         }
-
         multiDexEnabled = true
-
         val zhipuApiKey = project.findProperty("ZHIPU_API_KEY") as? String
             ?: throw GradleException("ZHIPU_API_KEY is not defined in gradle.properties. Please check the file.")
-        buildConfigField("String", "ZHIPU_API_KEY", "\"$zhipuApiKey\"")
+        buildConfigField("String", "ZHIPU_API_KEY", "\"${zhipuApiKey}\"")
     }
 
     buildTypes {
@@ -51,13 +47,15 @@ android {
     buildFeatures {
         viewBinding = true
         buildConfig = true
+        dataBinding = true
     }
 
     packaging {
         resources.excludes += setOf(
             "META-INF/AL2.0",
             "META-INF/LGPL2.1",
-            "META-INF/DEPENDENCIES"
+            "META-INF/DEPENDENCIES",
+            "META-INF/*.kotlin_module"
         )
     }
 }
@@ -82,10 +80,9 @@ dependencies {
     implementation(libs.lifecycle.runtime)
     implementation(libs.core.splashscreen)
     implementation(libs.datastore.preferences)
+    implementation(libs.sqlite.ktx)
     implementation(libs.okhttp)
-
     coreLibraryDesugaring(libs.desugar.jdk.libs)
-
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)

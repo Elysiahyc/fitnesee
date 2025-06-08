@@ -17,6 +17,7 @@ test-rules = "1.6.1"
 desugar-jdk-libs = "2.1.2"
 cardview = "1.0.0"
 okhttp = "4.12.0"
+sqlite-ktx = "2.4.0"
 
 [libraries]
 appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
@@ -36,6 +37,7 @@ test-rules = { group = "androidx.test", name = "rules", version.ref = "test-rule
 desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugar-jdk-libs" }
 cardview = { group = "androidx.cardview", name = "cardview", version.ref = "cardview" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+sqlite-ktx = { group = "androidx.sqlite", name = "sqlite-ktx", version.ref = "sqlite-ktx" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string-array name="gender_options">
+        <item>男</item>
+        <item>女</item>
+    </string-array>
     <string-array name="goal_options">
-        <item>保持</item>
-        <item>减脂</item>
+        <item>减肥</item>
         <item>增肌</item>
+        <item>维持</item>
     </string-array>
 </resources>
